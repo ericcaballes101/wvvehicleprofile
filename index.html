@@ -158,6 +158,14 @@ textarea#recTa{width:100%;font:inherit;border:1px solid var(--accent);border-rad
 details.hist{margin-top:12px;font-size:13px;color:var(--muted)}
 details.hist summary{cursor:pointer;font-weight:600;color:var(--navy)}
 details.hist div{padding:4px 0;border-bottom:1px solid var(--line)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:5px 12px;font-size:12.5px;font-weight:600;color:var(--navy)}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.seg{display:inline-flex;background:#eef2f6;border-radius:10px;padding:3px}
+.seg button{border:0;background:transparent;padding:5px 14px;border-radius:8px;font-weight:600;color:var(--muted);font-size:13px}
+.seg button.on{background:var(--navy);color:#fff}
+.period .lab select{padding:7px 8px}
 footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
 .hidden{display:none!important}
 @media (max-width:900px){.uploads,.grid2,.grid3{grid-template-columns:1fr}.dk{grid-template-columns:repeat(2,1fr)}.info{grid-template-columns:repeat(2,1fr)}}
@@ -211,14 +219,14 @@ footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
     <div class="period">
       <h2 id="periodTitle">Fleet cost summary</h2>
       <div class="grow"></div>
-      <div class="lab">Period
-        <select id="yFrom"></select> to <select id="yTo"></select>
-      </div>
+      <div class="chips" id="presets"><button class="chip" data-p="all">All time</button><button class="chip" data-p="year">Latest year</button><button class="chip" data-p="12m">Last 12 months</button><button class="chip" data-p="month">Latest month</button></div>
+      <div class="lab">From <select id="mFrom"></select><select id="yFrom"></select> to <select id="mTo"></select><select id="yTo"></select></div>
     </div>
     <div class="kpis" id="kpis"></div>
 
     <div class="grid2">
-      <section class="card"><h2>Cost by year</h2><div class="sub">Maintenance and repair spend for the whole fleet</div>
+      <section class="card"><div class="chead"><div><h2 id="chartTitle">Cost by year</h2><div class="sub">Maintenance and repair spend for the whole fleet</div></div>
+        <div class="seg" id="seg"><button data-m="year" class="on">Yearly</button><button data-m="month">Monthly</button></div></div>
         <div class="legend"><span><i style="background:var(--teal)"></i>Regular maintenance</span><span><i style="background:var(--accent)"></i>Vehicle repair</span></div>
         <div id="yearChart"></div></section>
       <section class="card"><h2>Maintenance vs. repair</h2><div class="sub">Share of total spend</div>
@@ -341,7 +349,7 @@ function parseDate(v) {
 }
 
 /* ---------------- state ---------------- */
-const S = { profile: null, maint: null, names: {}, yFrom: 0, yTo: 0, years: [], edits: {}, log: [], editing: null, sort: { k: 'total', dir: -1 }, q: '', fStatus: '', fLoc: '', agg: null, open: null, tab: 'all' };
+const S = { profile: null, maint: null, names: {}, yFrom: 0, yTo: 0, mFrom: 1, mTo: 12, chartMode: 'year', years: [], edits: {}, log: [], editing: null, sort: { k: 'total', dir: -1 }, q: '', fStatus: '', fLoc: '', agg: null, open: null, tab: 'all' };
 
 /* ---------------- parsing ---------------- */
 const lbl = v => String(v ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -468,10 +476,9 @@ function refreshUploads() {
   h.innerHTML = `<summary>Upload history (${S.log.length})</summary>` + [...S.log].reverse().map(l => `<div>${new Date(l.at).toLocaleString('en-PH')} · ${esc(l.file)} · ${l.added} added, ${l.skipped} skipped${l.newest ? ' · newest ' + fmtDate(fromIso(l.newest)) : ''}</div>`).join('');
   if (S.profile && S.maint) {
     const ys = [...new Set(S.maint.map(r => r.year))].sort((a, b) => a - b), prev = S.years, hi = ys[ys.length - 1];
-    const atFull = !prev.length || (S.yFrom === prev[0] && S.yTo === prev[prev.length - 1]);
+    const atFull = !prev.length || (S.yFrom === prev[0] && S.yTo === prev[prev.length - 1] && S.mFrom === 1 && S.mTo === 12);
     S.years = ys; if (atFull || S.yFrom < ys[0] || S.yFrom > hi) S.yFrom = ys[0]; if (atFull || S.yTo > hi || S.yTo < ys[0]) S.yTo = hi;
-    $('#yFrom').innerHTML = $('#yTo').innerHTML = ys.map(y => `<option>${y}</option>`).join('');
-    $('#yFrom').value = S.yFrom; $('#yTo').value = S.yTo;
+    if (atFull) { S.mFrom = 1; S.mTo = 12; } syncPeriod();
     $('#dlBtn').disabled = false; $('#report').classList.remove('hidden');
     const keys = new Set(S.profile.map(p => p.key));
     const unk = [...new Set(S.maint.filter(r => !keys.has(r.key)).map(r => r.plate))];
@@ -494,12 +501,40 @@ $('#resetBtn').onclick = () => {
 $('#backupBtn').onclick = downloadBackup;
 $('#restoreBtn').onclick = () => $('#restoreInput').click();
 $('#restoreInput').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; $('#msgs').innerHTML = ''; try { await restoreFrom(f); save(); refreshUploads(); } catch (err) { showMsg('err', `Could not restore "${f.name}": ${err.message}.`); } };
-$('#yFrom').onchange = e => { S.yFrom = +e.target.value; if (S.yFrom > S.yTo) { S.yTo = S.yFrom; $('#yTo').value = S.yTo; } render(); };
-$('#yTo').onchange = e => { S.yTo = +e.target.value; if (S.yTo < S.yFrom) { S.yFrom = S.yTo; $('#yFrom').value = S.yFrom; } render(); };
+const ymOf = (y, m) => y * 12 + m - 1;
+function syncPeriod() {
+  const ys = S.years.map(y => `<option>${y}</option>`).join(''), ms = MON.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+  $('#yFrom').innerHTML = $('#yTo').innerHTML = ys; $('#mFrom').innerHTML = $('#mTo').innerHTML = ms;
+  $('#yFrom').value = S.yFrom; $('#yTo').value = S.yTo; $('#mFrom').value = S.mFrom; $('#mTo').value = S.mTo;
+}
+function onPeriod(which) {
+  S.yFrom = +$('#yFrom').value; S.mFrom = +$('#mFrom').value; S.yTo = +$('#yTo').value; S.mTo = +$('#mTo').value;
+  if (ymOf(S.yFrom, S.mFrom) > ymOf(S.yTo, S.mTo)) { if (which === 'from') { S.yTo = S.yFrom; S.mTo = S.mFrom; } else { S.yFrom = S.yTo; S.mFrom = S.mTo; } }
+  syncPeriod(); render();
+}
+['#yFrom', '#mFrom'].forEach(s => $(s).onchange = () => onPeriod('from'));
+['#yTo', '#mTo'].forEach(s => $(s).onchange = () => onPeriod('to'));
+function setPeriod(a, b) {
+  const lo = S.years[0] * 12, hi = S.years[S.years.length - 1] * 12 + 11; a = Math.max(a, lo); b = Math.min(b, hi);
+  S.yFrom = Math.floor(a / 12); S.mFrom = a % 12 + 1; S.yTo = Math.floor(b / 12); S.mTo = b % 12 + 1; syncPeriod(); render();
+}
+$('#presets').onclick = e => {
+  const p = e.target.closest('.chip')?.dataset.p; if (!p || !S.maint) return;
+  const mx = S.maint.reduce((m, r) => Math.max(m, r.date.getFullYear() * 12 + r.date.getMonth()), 0);
+  if (p === 'all') setPeriod(S.years[0] * 12, S.years[S.years.length - 1] * 12 + 11);
+  else if (p === 'year') setPeriod(Math.floor(mx / 12) * 12, Math.floor(mx / 12) * 12 + 11);
+  else if (p === '12m') setPeriod(mx - 11, mx); else setPeriod(mx, mx);
+};
+$('#seg').onclick = e => { const m = e.target.closest('button')?.dataset.m; if (!m) return; S.chartMode = m; yearChart(S.agg); };
+function periodLabel() {
+  if (S.mFrom === 1 && S.mTo === 12) return S.yFrom === S.yTo ? `${S.yFrom}` : `${S.yFrom} to ${S.yTo}`;
+  const a = `${MON[S.mFrom - 1]} ${S.yFrom}`, b = `${MON[S.mTo - 1]} ${S.yTo}`; return a === b ? a : `${a} to ${b}`;
+}
 
 /* ---------------- aggregation ---------------- */
 function aggregate(yFrom, yTo) {
-  const recs = S.maint.filter(r => r.year >= yFrom && r.year <= yTo);
+  const pa = yFrom * 12 + S.mFrom - 1, pb = yTo * 12 + S.mTo - 1, ymr = r => r.date.getFullYear() * 12 + r.date.getMonth();
+  const recs = S.maint.filter(r => ymr(r) >= pa && ymr(r) <= pb);
   const map = new Map();
   const mk = p => ({ p, recs: [], mN: 0, mAmt: 0, rN: 0, rAmt: 0, total: 0, byYear: {}, last: null, first: null, lastKm: null });
   S.profile.forEach(p => map.set(p.key, mk(p)));
@@ -520,16 +555,18 @@ function aggregate(yFrom, yTo) {
   });
   const yearly = {}; for (let y = yFrom; y <= yTo; y++) yearly[y] = { m: 0, r: 0 };
   recs.forEach(r => yearly[r.year][r.type === 'Repair' ? 'r' : 'm'] += r.amt);
+  const monthly = []; for (let i = pa; i <= pb; i++) monthly.push({ ym: i, m: 0, r: 0, n: 0 });
+  recs.forEach(r => { const o = monthly[ymr(r) - pa]; o[r.type === 'Repair' ? 'r' : 'm'] += r.amt; o.n++; });
   const t = { recs: recs.length, total: 0, mAmt: 0, rAmt: 0, mN: 0, rN: 0 };
   vehicles.forEach(v => { t.total += v.total; t.mAmt += v.mAmt; t.rAmt += v.rAmt; t.mN += v.mN; t.rN += v.rN; });
-  return { vehicles, yearly, t, yFrom, yTo };
+  return { vehicles, yearly, monthly, t, yFrom, yTo };
 }
 
 /* ---------------- render ---------------- */
 const C = { m: '#13808b', r: '#e8731a' };
 function render() {
   const A = S.agg = aggregate(S.yFrom, S.yTo);
-  $('#periodTitle').textContent = `Fleet cost summary · ${S.yFrom === S.yTo ? S.yFrom : S.yFrom + ' to ' + S.yTo}`;
+  $('#periodTitle').textContent = `Fleet cost summary · ${periodLabel()}`;
   const active = A.vehicles.filter(v => !/dispos/i.test(v.p.status)).length;
   const top = [...A.vehicles].sort((a, b) => b.total - a.total)[0];
   const nv = A.vehicles.filter(v => v.recs.length).length || 1;
@@ -548,20 +585,25 @@ function render() {
   if (S.open) openDrawer(S.open, true);
 }
 function yearChart(A) {
-  const ys = Object.keys(A.yearly), W = 760, H = 260, pl = 56, pb = 28, pt = 22, pr = 8;
-  const max = Math.max(1, ...ys.map(y => A.yearly[y].m + A.yearly[y].r));
+  const mo = S.chartMode === 'month';
+  const bars = mo ? A.monthly.map(o => ({ m: o.m, r: o.r, mi: o.ym % 12, yr: Math.floor(o.ym / 12) })) : Object.keys(A.yearly).map(y => ({ m: A.yearly[y].m, r: A.yearly[y].r, yr: +y }));
+  const nb = bars.length;
+  bars.forEach(b => { b.tip = mo ? `${MON[b.mi]} ${b.yr}` : `${b.yr}`; b.lab = !mo ? `${b.yr}` : nb <= 14 ? `${MON[b.mi]} '${String(b.yr).slice(2)}` : b.mi === 0 ? `${b.yr}` : (nb <= 36 && b.mi % 3 === 0 ? MON[b.mi] : ''); });
+  document.querySelectorAll('#seg button').forEach(x => x.classList.toggle('on', x.dataset.m === S.chartMode));
+  $('#chartTitle').textContent = mo ? 'Cost by month' : 'Cost by year';
+  const W = 760, H = 260, pl = 56, pb = 28, pt = 22, pr = 8;
+  const max = Math.max(1, ...bars.map(b => b.m + b.r));
   const nice = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p * 2) / 2 * p; })() || max;
-  const bw = Math.min(56, (W - pl - pr) / ys.length * .62), step = (W - pl - pr) / ys.length;
-  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Cost by year">`;
+  const step = (W - pl - pr) / nb, bw = Math.min(56, step * (nb > 30 ? .8 : .62));
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${mo ? 'Cost by month' : 'Cost by year'}">`;
   for (let i = 0; i <= 4; i++) { const v = nice / 4 * i, y = H - pb - (H - pb - pt) * v / nice; s += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="#e6ebf1"/><text x="${pl - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="#6b7785">${v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.round(v / 1000) + 'k'}</text>`; }
-  ys.forEach((y, i) => {
-    const d = A.yearly[y], x = pl + step * i + (step - bw) / 2, hs = H - pb - pt;
-    const hm = hs * d.m / nice, hr = hs * d.r / nice, base = H - pb;
-    s += `<g><title>${y}: ${peso(d.m + d.r)} (maintenance ${peso(d.m)}, repairs ${peso(d.r)})</title>
+  bars.forEach((d, i) => {
+    const x = pl + step * i + (step - bw) / 2, hs = H - pb - pt, hm = hs * d.m / nice, hr = hs * d.r / nice, base = H - pb;
+    s += `<g><title>${d.tip}: ${peso(d.m + d.r)} (maintenance ${peso(d.m)}, repairs ${peso(d.r)})</title>
       <rect x="${x}" y="${base - hm}" width="${bw}" height="${hm}" fill="${C.m}" rx="2"/>
       <rect x="${x}" y="${base - hm - hr}" width="${bw}" height="${hr}" fill="${C.r}" rx="2"/>
-      <text x="${x + bw / 2}" y="${base - hm - hr - 6}" text-anchor="middle" font-size="11" font-weight="600" fill="#17212b">${d.m + d.r ? Math.round((d.m + d.r) / 1000) + 'k' : ''}</text>
-      <text x="${x + bw / 2}" y="${H - 9}" text-anchor="middle" font-size="12" fill="#6b7785">${y}</text></g>`;
+      ${nb <= 24 && d.m + d.r ? `<text x="${x + bw / 2}" y="${base - hm - hr - 6}" text-anchor="middle" font-size="${nb > 14 ? 9.5 : 11}" font-weight="600" fill="#17212b">${Math.round((d.m + d.r) / 1000)}k</text>` : ''}
+      <text x="${x + bw / 2}" y="${H - 9}" text-anchor="middle" font-size="${nb > 14 ? 10.5 : 12}" fill="#6b7785">${d.lab}</text></g>`;
   });
   $('#yearChart').innerHTML = s + '</svg>';
 }
@@ -690,7 +732,7 @@ const colL = n => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = Stri
 
 async function exportExcel() {
   const A = S.agg, wb = new ExcelJS.Workbook(); wb.creator = 'WVDF Fleet Management'; wb.created = new Date();
-  const period = S.yFrom === S.yTo ? `${S.yFrom}` : `${S.yFrom} to ${S.yTo}`;
+  const period = periodLabel();
   const vs = [...A.vehicles].sort((a, b) => (a.p.np - b.p.np) || 0); // keep profile order, unmatched last
   const stamp = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -758,6 +800,18 @@ async function exportExcel() {
   const lE = lS + lrows.length - 1; totalRow(sm, lE + 1, 5); sm.getCell(lE + 1, 1).value = 'Total';
   ['B', 'C', 'D', 'E'].forEach((Lc, i) => { const c = sm.getCell(lE + 1, i + 2); c.value = { formula: `SUM(${Lc}${lS}:${Lc}${lE})`, result: [A.vehicles.length, A.t.mAmt, A.t.rAmt, A.t.total][i] }; if (i) c.numFmt = PESO; else c.alignment = { horizontal: 'center' }; });
 
+  /* --- Monthly summary --- */
+  const mw = wb.addWorksheet('Monthly Summary', { views: [{ state: 'frozen', ySplit: 4, showGridLines: false }], properties: { tabColor: { argb: 'FF2E8B57' } } });
+  band(mw, 1, 'FLEET COST BY MONTH', 6, 15, NAVY, 30); band(mw, 2, `Period covered: ${period}`, 6, 10.5, 'FF173D63', 20); mw.getRow(3).height = 6;
+  headRow(mw, 4, ['Month', 'Maintenance Cost', 'Repair Cost', 'Total Cost', 'Records', '% of Period Total']);
+  A.monthly.forEach((o, i) => { const r = 5 + i, row = bodyRow(mw, r, i, 6); row.getCell(1).value = `${MON[o.ym % 12]} ${Math.floor(o.ym / 12)}`; row.getCell(2).value = o.m; row.getCell(3).value = o.r;
+    row.getCell(4).value = { formula: `B${r}+C${r}`, result: o.m + o.r }; row.getCell(5).value = o.n; row.getCell(5).alignment = { horizontal: 'center' };
+    [2, 3, 4].forEach(k => row.getCell(k).numFmt = PESO); row.getCell(6).numFmt = '0.0%'; });
+  const mE = 4 + A.monthly.length, mT = mE + 1; totalRow(mw, mT, 6); mw.getCell(mT, 1).value = 'Total';
+  [['B', A.t.mAmt], ['C', A.t.rAmt], ['D', A.t.total], ['E', A.t.recs]].forEach(([Lc, val], i) => { const c = mw.getCell(mT, i + 2); c.value = { formula: `SUM(${Lc}5:${Lc}${mE})`, result: val }; if (i < 3) c.numFmt = PESO; else c.alignment = { horizontal: 'center' }; });
+  for (let r = 5; r <= mE; r++) { const o = A.monthly[r - 5]; mw.getCell(r, 6).value = { formula: `IF($D$${mT}=0,0,D${r}/$D$${mT})`, result: A.t.total ? (o.m + o.r) / A.t.total : 0 }; }
+  [14, 18, 18, 18, 12, 16].forEach((w, i) => mw.getColumn(i + 1).width = w);
+
   /* --- Sheet 3: Cost by Year (vehicle x year) --- */
   const yrs = Object.keys(A.yearly), cy = wb.addWorksheet('Cost by Vehicle & Year', { views: [{ state: 'frozen', xSplit: 2, ySplit: 4, showGridLines: false }], properties: { tabColor: { argb: TEAL } } });
   const m = 2 + yrs.length + 1;
@@ -791,7 +845,7 @@ async function exportExcel() {
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = `WVDF_Vehicle_Profile_Report_${S.yFrom}-${S.yTo}.xlsx`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  a.download = `WVDF_Vehicle_Profile_Report_${period.replace(/ to /, '-').replace(/ /g, '')}.xlsx`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 $('#dlBtn').onclick = async () => { const b = $('#dlBtn'), t = b.innerHTML; b.disabled = true; b.textContent = 'Building report…'; try { await exportExcel(); } catch (e) { console.error(e); alert('Could not build the Excel file: ' + e.message); } b.innerHTML = t; b.disabled = false; };
 try { const raw = localStorage.getItem(KEY); if (raw) { const d = JSON.parse(raw); if (d.app === 'wvdf-fleet-profile') { applyState(d); refreshUploads(); $('#saveLab').textContent = 'Your saved data was loaded from this browser.'; } } } catch (e) { console.warn('no saved data', e); }
