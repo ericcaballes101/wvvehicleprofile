@@ -148,6 +148,16 @@ td.num{font-variant-numeric:tabular-nums}
 .tag.rep{background:var(--red-soft);color:var(--red)} .tag.mnt{background:var(--teal-soft);color:#0d5f68}
 .notes{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0;white-space:pre-wrap;font-size:13px}
 .notes h4{margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.notes h4{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mini{border:1px solid var(--line);background:#fff;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:600;color:var(--navy);margin-left:6px;text-transform:none;letter-spacing:0}
+.mini:hover{border-color:var(--accent);color:var(--accent)}
+textarea#recTa{width:100%;font:inherit;border:1px solid var(--accent);border-radius:8px;padding:8px 10px;resize:vertical;outline:3px solid var(--accent-soft)}
+.btn.sm{padding:6px 14px;font-size:13px;box-shadow:none}
+.tag.edt{background:var(--amber-soft);color:var(--amber);margin:0 0 0 6px}
+.tag.nw{background:var(--accent);color:#fff;margin-left:6px}
+details.hist{margin-top:12px;font-size:13px;color:var(--muted)}
+details.hist summary{cursor:pointer;font-weight:600;color:var(--navy)}
+details.hist div{padding:4px 0;border-bottom:1px solid var(--line)}
 footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
 .hidden{display:none!important}
 @media (max-width:900px){.uploads,.grid2,.grid3{grid-template-columns:1fr}.dk{grid-template-columns:repeat(2,1fr)}.info{grid-template-columns:repeat(2,1fr)}}
@@ -164,6 +174,9 @@ footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
       </div>
       <div class="spacer"></div>
       <button class="btn ghost hidden" id="resetBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Start over</button>
+      <button class="btn ghost" id="restoreBtn" title="Load a backup file (.json)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 15V4m0 0L8 8m4-4l4 4M4 19h16"/></svg>Restore</button>
+      <input type="file" id="restoreInput" accept=".json,application/json" class="hidden">
+      <button class="btn ghost hidden" id="backupBtn" title="Save all data and edits to a backup file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></svg>Backup</button>
       <button class="btn primary" id="dlBtn" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>Download Excel report</button>
     </div>
   </div>
@@ -172,7 +185,7 @@ footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
 <main class="wrap">
   <section class="card" id="uploadCard">
     <h2>Upload your files</h2>
-    <div class="sub">Drop both files here at once, or click a box. Accepts .xls and .xlsx. The tool recognizes which file is which. Files stay in your browser and are not uploaded anywhere.</div>
+    <div class="sub">Drop both files here at once, or click a box. Accepts .xls and .xlsx. The tool recognizes which file is which. Files stay in your browser and are not uploaded anywhere. Uploading a newer maintenance file only <b>adds the new records</b>; anything already in the system is skipped.</div>
     <div class="uploads">
       <label class="drop" id="dropProfile" data-kind="profile">
         <input type="file" accept=".xls,.xlsx" multiple>
@@ -190,6 +203,8 @@ footer{color:var(--muted);text-align:center;font-size:12px;padding:10px 0 30px}
       </label>
     </div>
     <div id="msgs"></div>
+    <details class="hist hidden" id="hist"></details>
+    <div class="lab" id="saveLab" style="margin-top:10px"></div>
   </section>
 
   <div id="report" class="hidden">
@@ -326,7 +341,7 @@ function parseDate(v) {
 }
 
 /* ---------------- state ---------------- */
-const S = { profile: null, maint: null, names: {}, yFrom: 0, yTo: 0, years: [], sort: { k: 'total', dir: -1 }, q: '', fStatus: '', fLoc: '', agg: null, open: null, tab: 'all' };
+const S = { profile: null, maint: null, names: {}, yFrom: 0, yTo: 0, years: [], edits: {}, log: [], editing: null, sort: { k: 'total', dir: -1 }, q: '', fStatus: '', fLoc: '', agg: null, open: null, tab: 'all' };
 
 /* ---------------- parsing ---------------- */
 const lbl = v => String(v ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -392,26 +407,69 @@ function parseMaint(rows) {
 
 /* ---------------- files ---------------- */
 function showMsg(type, text) { const d = document.createElement('div'); d.className = 'msg ' + type; d.textContent = text; $('#msgs').appendChild(d); }
+const KEY = 'wvdf_fleet_profile_v1';
+const iso = d => d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : null;
+const fromIso = s => { if (!s) return null; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const effReco = p => S.edits[p.key]?.reco ?? p.reco ?? '';
+const ser = r => ({ ...r, date: iso(r.date), fin: iso(r.fin) });
+const deser = r => { const d = fromIso(r.date); return { ...r, date: d, year: d.getFullYear(), fin: fromIso(r.fin) }; };
+const snapshot = () => ({ app: 'wvdf-fleet-profile', version: 1, created: new Date().toISOString(), names: S.names, profile: S.profile, maint: (S.maint || []).map(ser), edits: S.edits, log: S.log });
+function save() {
+  const lab = $('#saveLab');
+  try { localStorage.setItem(KEY, JSON.stringify(snapshot())); lab.textContent = 'Auto-saved in this browser at ' + new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }) + '. Use Backup to keep a copy as a file.'; }
+  catch (e) { lab.textContent = 'Auto-save is not available in this browser. Please use Backup to keep your data and edits.'; }
+}
+function applyState(d) {
+  S.profile = d.profile; S.maint = d.maint.map(deser); S.edits = d.edits || {}; S.log = d.log || []; S.names = d.names || {}; S.years = []; closeDrawer();
+}
+const recId = r => [r.key, iso(r.date), r.type, r.amt, r.desc.toLowerCase().replace(/[^a-z0-9]/g, '')].join('|');
+function mergeMaint(rows, fname) {
+  const have = new Map(); (S.maint || []).forEach(r => have.set(recId(r), (have.get(recId(r)) || 0) + 1));
+  const first = !S.maint; S.maint = S.maint || [];
+  const batch = S.log.length; const added = []; let skipped = 0;
+  rows.forEach(r => { const k = recId(r), n = have.get(k) || 0; if (n > 0) { have.set(k, n - 1); skipped++; } else { r.batch = batch; added.push(r); } });
+  S.maint.push(...added); S.names.maint = fname;
+  const newest = added.reduce((m, r) => (!m || r.date > m ? r.date : m), null);
+  S.log.push({ at: new Date().toISOString(), file: fname, read: rows.length, added: added.length, skipped, newest: iso(newest) });
+  if (first) showMsg('info', `${added.length} maintenance records loaded.`);
+  else if (!added.length) showMsg('warn', `No new records. All ${rows.length} records in "${fname}" are already in the system, so nothing was added.`);
+  else showMsg('info', `Added ${added.length} new record${added.length > 1 ? 's' : ''} (newest: ${fmtDate(newest)}). ${skipped} record${skipped === 1 ? '' : 's'} already in the system ${skipped === 1 ? 'was' : 'were'} skipped.`);
+}
+async function restoreFrom(f) {
+  const d = JSON.parse(await f.text());
+  if (d.app !== 'wvdf-fleet-profile' || !Array.isArray(d.profile) || !Array.isArray(d.maint)) throw new Error('this is not a backup made by this tool');
+  if ((S.profile || S.maint) && !confirm('Restoring replaces everything currently in the tool with the backup. Continue?')) return;
+  applyState(d); showMsg('info', `Backup restored: ${S.profile.length} vehicles, ${S.maint.length} records, ${Object.keys(S.edits).length} edited recommendation(s). Backup was made ${new Date(d.created).toLocaleString('en-PH')}.`);
+}
+function downloadBackup() {
+  const blob = new Blob([JSON.stringify(snapshot(), null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `WVDF_Fleet_Backup_${iso(new Date())}.json`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 async function handleFiles(files) {
   $('#msgs').innerHTML = '';
   for (const f of files) {
     try {
+      if (/\.json$/i.test(f.name)) { await restoreFrom(f); continue; }
       const res = readSheet(await f.arrayBuffer());
       if (!res) { showMsg('err', `"${f.name}": could not recognize it as a vehicle profile or maintenance history file.`); continue; }
-      if (res.kind === 'profile') { S.profile = parseProfile(res.rows); S.names.profile = f.name; }
-      else { S.maint = parseMaint(res.rows); S.names.maint = f.name; if (S.maint.skipped) showMsg('warn', `${S.maint.skipped} maintenance row(s) had no valid date or amount and were skipped.`); }
+      if (res.kind === 'profile') { S.profile = parseProfile(res.rows); S.names.profile = f.name; showMsg('info', `Vehicle profile loaded: ${S.profile.length} vehicles.` + (Object.keys(S.edits).length ? ' Your edited recommendations were kept.' : '')); }
+      else { const rows = parseMaint(res.rows); if (rows.skipped) showMsg('warn', `${rows.skipped} maintenance row(s) had no valid date or amount and were skipped.`); mergeMaint(rows, f.name); }
     } catch (e) { console.error(e); showMsg('err', `"${f.name}": could not be read (${e.message}).`); }
   }
-  refreshUploads();
+  save(); refreshUploads();
 }
 function refreshUploads() {
   const set = (id, ok, name, meta) => { const el = $(id); el.classList.toggle('ok', ok); el.querySelector('.fname').textContent = ok ? name : ''; el.querySelector('.meta').textContent = ok ? meta : ''; el.querySelector('.hint').classList.toggle('hidden', ok); };
-  set('#dropProfile', !!S.profile, S.names.profile, S.profile ? `${S.profile.length} vehicles loaded` : '');
-  set('#dropMaint', !!S.maint, S.names.maint, S.maint ? `${S.maint.length} records loaded` : '');
+  set('#dropProfile', !!S.profile, S.names.profile, S.profile ? `${S.profile.length} vehicles loaded. Drop a new file to replace.` : '');
+  set('#dropMaint', !!S.maint, S.names.maint, S.maint ? `${S.maint.length} records in the system. Drop a newer file to add only the new records.` : '');
   $('#resetBtn').classList.toggle('hidden', !(S.profile || S.maint));
+  $('#backupBtn').classList.toggle('hidden', !(S.profile || S.maint));
+  const h = $('#hist'); h.classList.toggle('hidden', S.log.length < 1);
+  h.innerHTML = `<summary>Upload history (${S.log.length})</summary>` + [...S.log].reverse().map(l => `<div>${new Date(l.at).toLocaleString('en-PH')} · ${esc(l.file)} · ${l.added} added, ${l.skipped} skipped${l.newest ? ' · newest ' + fmtDate(fromIso(l.newest)) : ''}</div>`).join('');
   if (S.profile && S.maint) {
-    const ys = [...new Set(S.maint.map(r => r.year))].sort((a, b) => a - b);
-    S.years = ys; S.yFrom = ys[0]; S.yTo = ys[ys.length - 1];
+    const ys = [...new Set(S.maint.map(r => r.year))].sort((a, b) => a - b), prev = S.years, hi = ys[ys.length - 1];
+    const atFull = !prev.length || (S.yFrom === prev[0] && S.yTo === prev[prev.length - 1]);
+    S.years = ys; if (atFull || S.yFrom < ys[0] || S.yFrom > hi) S.yFrom = ys[0]; if (atFull || S.yTo > hi || S.yTo < ys[0]) S.yTo = hi;
     $('#yFrom').innerHTML = $('#yTo').innerHTML = ys.map(y => `<option>${y}</option>`).join('');
     $('#yFrom').value = S.yFrom; $('#yTo').value = S.yTo;
     $('#dlBtn').disabled = false; $('#report').classList.remove('hidden');
@@ -428,7 +486,14 @@ document.querySelectorAll('.drop').forEach(el => {
   ['dragleave', 'drop'].forEach(ev => el.addEventListener(ev, e => { e.preventDefault(); el.classList.remove('over'); }));
   el.addEventListener('drop', e => handleFiles([...e.dataTransfer.files]));
 });
-$('#resetBtn').onclick = () => { S.profile = S.maint = null; S.names = {}; $('#msgs').innerHTML = ''; closeDrawer(); refreshUploads(); };
+$('#resetBtn').onclick = () => {
+  if (!confirm('This clears all data and edits saved in this tool. Tip: click Backup first if you may need them again. Continue?')) return;
+  S.profile = S.maint = null; S.names = {}; S.edits = {}; S.log = []; S.years = []; S.editing = null; $('#msgs').innerHTML = ''; closeDrawer();
+  try { localStorage.removeItem(KEY); } catch (e) {} $('#saveLab').textContent = ''; refreshUploads();
+};
+$('#backupBtn').onclick = downloadBackup;
+$('#restoreBtn').onclick = () => $('#restoreInput').click();
+$('#restoreInput').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; $('#msgs').innerHTML = ''; try { await restoreFrom(f); save(); refreshUploads(); } catch (err) { showMsg('err', `Could not restore "${f.name}": ${err.message}.`); } };
 $('#yFrom').onchange = e => { S.yFrom = +e.target.value; if (S.yFrom > S.yTo) { S.yTo = S.yFrom; $('#yTo').value = S.yTo; } render(); };
 $('#yTo').onchange = e => { S.yTo = +e.target.value; if (S.yTo < S.yFrom) { S.yFrom = S.yTo; $('#yFrom').value = S.yFrom; } render(); };
 
@@ -558,6 +623,8 @@ function openDrawer(key, keepTab) {
   S.open = key; if (!keepTab) S.tab = 'all';
   const p = v.p, ys = Object.keys(S.agg.yearly), my = Math.max(1, ...ys.map(y => (v.byYear[y]?.m || 0) + (v.byYear[y]?.r || 0)));
   const list = v.recs.filter(r => S.tab === 'all' || (S.tab === 'rep' ? r.type === 'Repair' : r.type === 'Maintenance'));
+  const rec0 = effReco(p), editing = S.editing === key, edited = !!S.edits[key], lastB = S.maint.reduce((m, r) => Math.max(m, r.batch || 0), 0);
+  const recHtml = `<div class="notes"><h4><span>Recommendation${edited ? '<span class="tag edt">edited</span>' : ''}</span><span>${editing ? '' : '<button class="mini" id="recEdit">✎ Edit</button>'}${edited && !editing ? '<button class="mini" id="recReset" title="Go back to the original text from the profile file">Reset</button>' : ''}</span></h4>${editing ? `<textarea id="recTa" rows="4" placeholder="Type the recommendation…">${esc(rec0)}</textarea><div style="margin-top:8px;display:flex;gap:8px"><button class="btn primary sm" id="recSave">Save</button><button class="btn light sm" id="recCancel">Cancel</button></div>` : (rec0 ? esc(rec0) : '<span class="vsub">No recommendation yet. Click Edit to add one.</span>')}</div>`;
   const info = (l, val) => `<div><span>${l}</span><b>${esc(val || '—')}</b></div>`;
   $('#drawer').innerHTML = `<div class="dhead"><button class="x" aria-label="Close">×</button><h3>${esc(p.plate)}</h3>
     <p>${p.np ? 'Not in the vehicle profile file' : esc(`${p.make} ${p.desc} · ${p.year || ''} · ${p.color}`)}</p></div>
@@ -573,17 +640,22 @@ function openDrawer(key, keepTab) {
       <svg viewBox="0 0 ${ys.length * 56} 110" width="100%" style="max-height:150px">${ys.map((y, i) => { const d = v.byYear[y] || { m: 0, r: 0 }, h1 = 70 * d.m / my, h2 = 70 * d.r / my, x = i * 56 + 10;
         return `<g><title>${y}: ${peso(d.m + d.r)}</title><rect x="${x}" y="${88 - h1}" width="36" height="${h1}" fill="${C.m}" rx="2"/><rect x="${x}" y="${88 - h1 - h2}" width="36" height="${h2}" fill="${C.r}" rx="2"/>
         <text x="${x + 18}" y="104" text-anchor="middle" font-size="11" fill="#6b7785">${y}</text>${d.m + d.r ? `<text x="${x + 18}" y="${82 - h1 - h2}" text-anchor="middle" font-size="9.5" font-weight="600">${Math.round((d.m + d.r) / 1000)}k</text>` : ''}</g>`; }).join('')}</svg></div>
-    ${p.forRepair ? `<div class="notes"><h4>For repair / replacement</h4>${esc(p.forRepair)}</div>` : ''}${p.reco ? `<div class="notes"><h4>Recommendation</h4>${esc(p.reco)}</div>` : ''}
+    ${p.forRepair ? `<div class="notes"><h4>For repair / replacement</h4>${esc(p.forRepair)}</div>` : ''}${recHtml}
     <div class="tabs" style="margin-top:14px"><button class="tab ${S.tab === 'all' ? 'on' : ''}" data-t="all">All records (${v.recs.length})</button><button class="tab ${S.tab === 'rep' ? 'on' : ''}" data-t="rep">Repairs (${v.rN})</button><button class="tab ${S.tab === 'mnt' ? 'on' : ''}" data-t="mnt">Maintenance (${v.mN})</button></div>
     ${list.length ? list.map(r => `<div class="rec"><div class="dt">${fmtDate(r.date)}<small>${r.km ? num(r.km) + ' km' : ''}</small></div>
-      <div class="ds"><span class="tag ${r.type === 'Repair' ? 'rep' : 'mnt'}">${r.type === 'Repair' ? 'Repair' : 'Maintenance'}</span><br>${esc(r.desc || '—')}<small>${[r.shop, r.drv, r.jo && 'JO ' + r.jo].filter(Boolean).map(esc).join(' · ')}</small></div>
+      <div class="ds"><span class="tag ${r.type === 'Repair' ? 'rep' : 'mnt'}">${r.type === 'Repair' ? 'Repair' : 'Maintenance'}</span>${lastB > 0 && r.batch === lastB ? '<span class="tag nw">NEW</span>' : ''}<br>${esc(r.desc || '—')}<small>${[r.shop, r.drv, r.jo && 'JO ' + r.jo].filter(Boolean).map(esc).join(' · ')}</small></div>
       <div class="am">${peso(r.amt)}</div></div>`).join('') : '<div class="empty card">No records for this selection in the chosen period.</div>'}
   </div>`;
   $('#drawer').classList.add('on'); $('#scrim').classList.add('on'); $('#drawer').setAttribute('aria-hidden', 'false');
   $('#drawer .x').onclick = closeDrawer;
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on('#recEdit', () => { S.editing = key; openDrawer(key, true); const ta = $('#recTa'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+  on('#recCancel', () => { S.editing = null; openDrawer(key, true); });
+  on('#recReset', () => { delete S.edits[key]; save(); openDrawer(key, true); });
+  on('#recSave', () => { const val = $('#recTa').value.trim(); if (val === String(v.p.reco || '').trim()) delete S.edits[key]; else S.edits[key] = { reco: val, at: new Date().toISOString() }; S.editing = null; save(); openDrawer(key, true); });
   $('#drawer .tabs').onclick = e => { const t = e.target.closest('.tab')?.dataset.t; if (t) { S.tab = t; const sc = $('#drawer').scrollTop; openDrawer(key, true); $('#drawer').scrollTop = sc; } };
 }
-function closeDrawer() { S.open = null; $('#drawer').classList.remove('on'); $('#scrim').classList.remove('on'); }
+function closeDrawer() { S.open = null; S.editing = null; $('#drawer').classList.remove('on'); $('#scrim').classList.remove('on'); }
 $('#scrim').onclick = closeDrawer;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
@@ -636,7 +708,7 @@ async function exportExcel() {
   vs.forEach((v, i) => {
     const r = 5 + i, p = v.p, row = bodyRow(ws, r, i, n);
     const hist = v.recs.filter(x => x.type === 'Repair').map(x => `${MON[x.date.getMonth()]} ${x.date.getFullYear()} - ${x.desc.length > 140 ? x.desc.slice(0, 137) + '…' : x.desc} (${peso(x.amt)})`).join('\n');
-    const vals = [i + 1, p.plate, p.make, p.year, p.desc, p.color, p.price, p.loc, p.status, p.odo, v.lastKm, xd(v.last), v.mN, v.mAmt, v.rN, v.rAmt, null, null, p.oldCost, p.fuel, p.forRepair, p.reco, hist];
+    const vals = [i + 1, p.plate, p.make, p.year, p.desc, p.color, p.price, p.loc, p.status, p.odo, v.lastKm, xd(v.last), v.mN, v.mAmt, v.rN, v.rAmt, null, null, p.oldCost, p.fuel, p.forRepair, effReco(p), hist];
     vals.forEach((x, k) => { if (x !== null && x !== '' && x !== undefined) row.getCell(k + 1).value = x; });
     row.getCell(17).value = { formula: `N${r}+P${r}`, result: v.total };
     row.getCell(18).value = p.price ? { formula: `Q${r}/G${r}`, result: v.pct } : 'n/a';
@@ -648,7 +720,7 @@ async function exportExcel() {
     const st = row.getCell(9), good = /good/i.test(p.status), disp = /dispos/i.test(p.status);
     st.font = { bold: true, name: 'Calibri', size: 10.5, color: { argb: good ? 'FF2E8B57' : disp ? 'FFC0392B' : 'FF566170' } };
     st.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: good ? 'FFE4F4EA' : disp ? 'FFFBE9E7' : 'FFE9ECF1' } };
-    row.height = Math.min(150, Math.max(24, 15 * Math.max(1, hist.split('\n').filter(Boolean).length, (p.reco || '').length / 28, (p.forRepair || '').length / 30)));
+    row.height = Math.min(150, Math.max(24, 15 * Math.max(1, hist.split('\n').filter(Boolean).length, effReco(p).length / 28, (p.forRepair || '').length / 30)));
   });
   const last = 4 + vs.length, tr = last + 1; totalRow(ws, tr, n);
   ws.getCell(tr, 2).value = 'FLEET TOTAL';
@@ -722,6 +794,7 @@ async function exportExcel() {
   a.download = `WVDF_Vehicle_Profile_Report_${S.yFrom}-${S.yTo}.xlsx`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 $('#dlBtn').onclick = async () => { const b = $('#dlBtn'), t = b.innerHTML; b.disabled = true; b.textContent = 'Building report…'; try { await exportExcel(); } catch (e) { console.error(e); alert('Could not build the Excel file: ' + e.message); } b.innerHTML = t; b.disabled = false; };
+try { const raw = localStorage.getItem(KEY); if (raw) { const d = JSON.parse(raw); if (d.app === 'wvdf-fleet-profile') { applyState(d); refreshUploads(); $('#saveLab').textContent = 'Your saved data was loaded from this browser.'; } } } catch (e) { console.warn('no saved data', e); }
 window.__S = S;
 })();
 </script>
